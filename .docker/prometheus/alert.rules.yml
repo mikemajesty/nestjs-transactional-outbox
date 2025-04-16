@@ -1,0 +1,11 @@
+groups:
+  - name: circuit-breaker-alerts
+    rules:
+      - alert: CircuitBreakerOpenThreshold
+        expr: increase(circuit_breaker_state_total{label="OPEN"}[1m]) >= 3
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Circuit Breaker abriu 3 vezes ou mais em 1 minuto'
+          description: 'O circuito foi aberto 3 vezes ou mais nos últimos 60 segundos. Verifique o serviço afetado.'

@@ -1,0 +1,38 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "es2017",
+    "resolveJsonModule": true,
+    "sourceMap": true,
+    "paths": {
+      "@/order/*": [
+        "./apps/order/src/*"
+      ],
+      "@/inventory/*": [
+        "./apps/inventory/src/*"
+      ],
+      "@/utils/*": [
+        "./utils/*"
+      ],
+      "@/infra/*": [
+        "./infra/*"
+      ]
+    },
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "incremental": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "strictNullChecks": true,
+    "noImplicitAny": true,
+    "strictBindCallApply": false,
+    "forceConsistentCasingInFileNames": false,
+    "noFallthroughCasesInSwitch": false
+  }
+}
