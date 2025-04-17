@@ -9,20 +9,6 @@ services:
     ports:
       - 6379:6379
 
-  nestjs-microservice-primary:
-    container_name: nestjs-microservice-primary
-    image: mongo:4.2.20
-    restart: always
-    entrypoint: ['/usr/bin/mongod', '--bind_ip_all', '--replSet', 'app']
-    volumes:
-      - nestjs-transactional-outbox:/data/db
-      - .docker/mongo/rs-init.sh:/scripts/mongo/rs-init.sh
-      - .docker/mongo/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
-    networks:
-      mongo-network-order-db:
-        ipv4_address: 10.5.0.5
-    ports:
-      - '27017:27017'
   mongo-express:
     container_name: nestjs-microservice-mongo-express
     image: mongo-express:0.49.0
@@ -37,7 +23,35 @@ services:
       - .env
     networks:
       mongo-network-order-db:
-  
+  inventory-db:
+    container_name: inventory-db
+    image: postgres
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=admin
+      - POSTGRES_DB=inventory-db
+    ports:
+      - '5432:5432'
+    volumes:
+      - nestjs-transactional-outbox-postgres:/data/postgres
+      - .docker/postgres/create-database-inventory-db.sql:/docker-entrypoint-initdb.d/create-database-inventory-db.sql
+    restart: always
+    networks:
+      - postgres-network-inventory-db
+  nestjs-microservice-primary:
+    container_name: nestjs-microservice-primary
+    image: mongo:4.2.20
+    restart: always
+    entrypoint: ['/usr/bin/mongod', '--bind_ip_all', '--replSet', 'app']
+    volumes:
+      - nestjs-transactional-outbox:/data/db
+      - .docker/mongo/rs-init.sh:/scripts/mongo/rs-init.sh
+      - .docker/mongo/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      mongo-network-order-db:
+        ipv4_address: 10.5.0.5
+    ports:
+      - '27017:27017'
   nestjs-microservice-secondary:
     container_name: nestjs-microservice-secondary
     image: mongo:4.2.20
@@ -61,37 +75,11 @@ services:
     networks:
       mongo-network-order-db:
         ipv4_address: 10.5.0.7
-
-  inventory-db:
-    container_name: inventory-db
-    image: postgres
-    environment:
-      - POSTGRES_USER=admin
-      - POSTGRES_PASSWORD=admin
-      - POSTGRES_DB=inventory-db
-    ports:
-      - '5432:5432'
-    volumes:
-      - nestjs-transactional-outbox-postgres:/data/postgres
-      - .docker/postgres/create-database-inventory-db.sql:/docker-entrypoint-initdb.d/create-database-inventory-db.sql
-    restart: always
-    networks:
-      - postgres-network-inventory-db
-
-  zookeeper:
-    image: confluentinc/cp-zookeeper:latest
-    networks:
-      - orchestrator-saga
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    ports:
-      - 22181:2181
-
   kafka:
     image: confluentinc/cp-kafka:latest
     networks:
       - orchestrator-saga
+      - mongo-network-order-db
     depends_on:
       - zookeeper
     ports:
@@ -104,7 +92,73 @@ services:
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKAJS_NO_PARTITIONER_WARNING: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:7.9.0
+    networks:
+      - orchestrator-saga
+      - mongo-network-order-db
+    depends_on:
+      - kafka
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: 'connect-cluster'
+      CONNECT_CONFIG_STORAGE_TOPIC: 'connect-configs'
+      CONNECT_OFFSET_STORAGE_TOPIC: 'connect-offsets'
+      CONNECT_REST_ADVERTISED_HOST_NAME: 'kafka-connect'
+      CONNECT_STATUS_STORAGE_TOPIC: 'connect-status'
+      CONNECT_BOOTSTRAP_SERVERS: 'kafka:9092'
+      CONNECT_KEY_CONVERTER: 'org.apache.kafka.connect.json.JsonConverter'
+      CONNECT_VALUE_CONVERTER: 'org.apache.kafka.connect.json.JsonConverter'
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: 'false'
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: 'false'
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: '1'
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: '1'
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: '1'
+      CONNECT_PLUGIN_PATH: "/usr/share/java,/etc/kafka-connect/debezium-plugins,/etc/kafka-connect/custom-plugins"
+      CONNECT_ERRORS_LOG_ENABLE: 'true'
+      CONNECT_LOG4J_LOGGERS: "org.apache.kafka.connect=DEBUG,io.debezium=DEBUG"
+    volumes:
+    - ./.docker/debezium/plugins:/etc/kafka-connect/debezium-plugins
+    - ./.docker/debezium/filters:/etc/kafka-connect/custom-plugins
 
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    networks:
+      - orchestrator-saga
+      - mongo-network-order-db
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - 22181:2181
+  # debezium:
+  #   image: debezium/connect:2.5.0.Final
+  #   ports:
+  #     - "8083:8083"
+  #   environment:
+  #     BOOTSTRAP_SERVERS: kafka:9092
+  #     GROUP_ID: 1
+  #     CONFIG_STORAGE_TOPIC: debezium_config
+  #     OFFSET_STORAGE_TOPIC: debezium_offset
+  #     STATUS_STORAGE_TOPIC: debezium_status
+  #     ENABLE_JMX: "true"
+  #     MONGODB_CONNECTION_STRING: "mongodb://nestjs-microservice-primary:27017"
+  #     MONGODB_DATABASE: "order-db"
+  #     TOPIC_PREFIX: "dbz"
+  #     LOG_LEVEL: ERROR
+  #     DEBEZIUM_LOGGING: error
+  #   networks:
+  #     - orchestrator-saga
+  #     - mongo-network-order-db
+  #   depends_on:
+  #     - kafka
+  #     - nestjs-microservice-primary
   redpanda-console:
     container_name: redpanda
     image: docker.redpanda.com/redpandadata/console:latest
@@ -122,29 +176,6 @@ services:
           brokers: ["kafka:9092"]
     depends_on:
       - "kafka"
-
-  debezium:
-    image: debezium/connect:2.5.0.Final
-    ports:
-      - "8083:8083"
-    environment:
-      BOOTSTRAP_SERVERS: kafka:9092
-      GROUP_ID: 1
-      CONFIG_STORAGE_TOPIC: debezium_config
-      OFFSET_STORAGE_TOPIC: debezium_offset
-      STATUS_STORAGE_TOPIC: debezium_status
-      ENABLE_JMX: "true"
-      MONGODB_CONNECTION_STRING: "mongodb://nestjs-microservice-primary:27017"
-      MONGODB_DATABASE: "order-db"
-      TOPIC_PREFIX: "dbz"
-      LOG_LEVEL: ERROR
-      DEBEZIUM_LOGGING: error
-    networks:
-      - orchestrator-saga
-      - mongo-network-order-db
-    depends_on:
-      - kafka
-      - nestjs-microservice-primary
   zipkin-all-in-one:
     container_name: saga-microservice-zipkin-all-in-one
     image: openzipkin/zipkin:latest

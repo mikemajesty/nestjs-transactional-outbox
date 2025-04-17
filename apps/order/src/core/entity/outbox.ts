@@ -45,7 +45,7 @@ export class OutboxEntity extends BaseEntity<OutboxEntity>() {
 
   eventType!: string; // 'OrderCreated'
 
-  payload!: unknown; // Dados completos do pedido
+  payload!: any; // Dados completos do pedido
 
   status!: OutboxStatus;
 

@@ -34,8 +34,8 @@ export class OrderController {
         const entity = new OrderEntity(body)
         await this.repository.create(entity)
         const outbox = new OutboxEntity({
-          id: "508aeef7-f081-4e72-90d3-764bda7deb9b",
-          aggregateId: entity.id,
+          id: entity.id,
+          aggregateId: "508aeef7-f081-4e72-90d3-764bda7deb9b",
           aggregateType: OutboxEntity.name,
           eventType: 'OrderCreated',
           payload: entity,
