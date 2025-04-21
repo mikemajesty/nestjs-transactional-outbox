@@ -12,9 +12,11 @@ import { IInventoryRepository } from '@/inventory/core/repository/inventory';
 import { HttpService } from '@nestjs/axios';
 import { OutboxEntity, OutboxStatus } from '@/order/core/entity/outbox';
 import { firstValueFrom } from 'rxjs';
+import { Logger } from '@nestjs/common';
 
 @Controller()
 export class ConsumerController implements OnModuleInit {
+  logger = new Logger(ConsumerController.name);
   private errorCircuitBreaker!: CircuitBreaker;
 
   constructor(
@@ -38,11 +40,7 @@ export class ConsumerController implements OnModuleInit {
   }
 
   async onModuleInit() {
-    await this.consumerVerifyInventoty.consumer.connect();
-    await this.consumerVerifyInventoty.consumer.subscribe({
-      topic: TopicsProducerEnum.DBZ_VERIFIED_INVENTORY,
-      fromBeginning: true
-    });
+    await this.initializeKafkaConsumer()
 
     await this.consumerVerifyInventoty.consumer.run({
       eachMessage: async ({ message, heartbeat }) => {
@@ -52,11 +50,7 @@ export class ConsumerController implements OnModuleInit {
     }).catch(async error => {
       console.error('Kafka consumer crashed', error)
       await this.consumerVerifyInventoty.consumer.disconnect()
-      await this.consumerVerifyInventoty.consumer.connect();
-      await this.consumerVerifyInventoty.consumer.subscribe({
-        topic: TopicsProducerEnum.DBZ_VERIFIED_INVENTORY,
-        fromBeginning: true
-      });
+      await this.initializeKafkaConsumer()
     });
   }
 
@@ -65,8 +59,10 @@ export class ConsumerController implements OnModuleInit {
 
     const entity = new OutboxEntity(outbox)
 
-    console.log(`[${entity.id}] Tentativa número ${entity.retryCount}`);
-    if (entity.retryCount && entity.retryCount < 5) {
+    const OUTBOX_URL = `http://localhost:4000/outbox/${entity.id}`;
+
+    this.logger.warn(`[${entity.id}] Tentativa número ${entity.retryCount}`);
+    if (entity.retryCount) {
       const delay = this.getExponentialDelay(entity.retryCount);
       await this.sleep(delay);
     }
@@ -74,13 +70,13 @@ export class ConsumerController implements OnModuleInit {
     const result = await this.errorCircuitBreaker.fire(entity);
     if (result === 'success') {
       await firstValueFrom(
-        this.httpService.put(`http://localhost:4000/outbox/${entity.id}`, { status: OutboxStatus.processed } as OutboxEntity)
+        this.httpService.put(OUTBOX_URL, { status: OutboxStatus.processed } as OutboxEntity)
       );
     }
 
     if (result === "error") {
       await firstValueFrom(
-        this.httpService.put(`http://localhost:4000/outbox/${entity.id}`, { status: OutboxStatus.failed } as OutboxEntity)
+        this.httpService.put(OUTBOX_URL, { status: OutboxStatus.failed } as OutboxEntity)
       );
     }
   }
@@ -148,17 +144,17 @@ export class ConsumerController implements OnModuleInit {
 
   halfOpenEvent() {
     this.metricsService.setCircuitBreakerState('HALF_OPEN', name);
-    console.log("halfOpen event");
+    this.logger.warn("halfOpen event");
   }
 
   closeEvent() {
     this.metricsService.setCircuitBreakerState('CLOSED', name);
-    console.log("close event");
+    this.logger.warn("close event");
   }
 
   openEvent() {
     this.metricsService.setCircuitBreakerState('OPEN', name);
-    console.log("open event");
+    this.logger.warn("open event");
   }
 
   private async sleep(ms: number): Promise<void> {
@@ -169,12 +165,20 @@ export class ConsumerController implements OnModuleInit {
     const baseDelay = 1000;
     const factor = 2;
     const maxDelay = 32000;
-    const jitter = Math.random() * 1000; // até 1 segundo de jitter
+    const jitter = Math.random() * 1000;
     return Math.min(baseDelay * Math.pow(factor, retryCount - 1) + jitter, maxDelay);
   }
 
   private isRetryable(status: number): boolean {
     const retryableStatuses = new Set([401, 403, 429]);
     return retryableStatuses.has(status) || (status >= 500 && status < 600);
+  }
+
+  private async initializeKafkaConsumer(): Promise<void> {
+    await this.consumerVerifyInventoty.consumer.connect();
+    await this.consumerVerifyInventoty.consumer.subscribe({
+      topic: TopicsProducerEnum.DBZ_VERIFIED_INVENTORY,
+      fromBeginning: true
+    });
   }
 }
