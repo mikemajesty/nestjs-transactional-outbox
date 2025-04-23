@@ -1,29 +1,34 @@
-import { Injectable } from '@nestjs/common';
-import { RedisClientType, SetOptions } from 'redis';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { RedisClientType } from 'redis';
 
 import { ErrorType, ILoggerAdapter } from '@/infra/logger';
 import { ApiInternalServerException } from '@/utils/exception';
 
 @Injectable()
-export class RedisService {
-  client!: RedisClientType;
-
+export class RedisService implements OnModuleDestroy {
   constructor(
     private readonly logger: ILoggerAdapter,
-    client: RedisClientType
-  ) {
-    this.client = client;
-  }
+    readonly client: RedisClientType
+  ) {}
 
   async connect(): Promise<RedisClientType> {
     try {
-      await this.client.connect();
-      this.logger.log('🎯 redis connected!\n');
+      if (!this.client.isOpen) {
+        await this.client.connect();
+        this.logger.log('🎯 Redis connected!\n');
+      }
       return this.client;
     } catch (error) {
       throw new ApiInternalServerException((error as { message: string }).message, {
         context: `${RedisService.name}/connect`
       });
+    }
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    if (this.client.isOpen) {
+      await this.client.quit();
+      this.logger.log('🔌 Redis connection closed.\n');
     }
   }
 }

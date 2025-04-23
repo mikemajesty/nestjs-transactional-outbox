@@ -13,6 +13,7 @@ import { HttpService } from '@nestjs/axios';
 import { OutboxEntity, OutboxStatus } from '@/order/core/entity/outbox';
 import { firstValueFrom } from 'rxjs';
 import { Logger } from '@nestjs/common';
+import { RedisService } from '@/infra/redis/service';
 
 @Controller()
 export class ConsumerController implements OnModuleInit {
@@ -25,7 +26,8 @@ export class ConsumerController implements OnModuleInit {
     private readonly eventEmitter: EventEmitter2,
     private readonly metricsService: MetricsService,
     private readonly inventoryRepository: IInventoryRepository,
-    private readonly httpService: HttpService
+    private readonly httpService: HttpService,
+    private readonly redis: RedisService
   ) {
     this.errorCircuitBreaker = new CircuitBreaker(this.execute.bind(this), {
       timeout: 6000000,
@@ -57,7 +59,13 @@ export class ConsumerController implements OnModuleInit {
   async processInventory(message: KafkaMessage): Promise<void> {
     const outbox = JSON.parse(message.value?.toString("utf-8") as string)
 
+
     const entity = new OutboxEntity(outbox)
+    const exists = await this.getIdempotence(entity)
+
+    if (exists) {
+      return
+    }
 
     const OUTBOX_URL = `http://localhost:4000/outbox/${entity.id}`;
 
@@ -155,6 +163,20 @@ export class ConsumerController implements OnModuleInit {
   openEvent() {
     this.metricsService.setCircuitBreakerState('OPEN', name);
     this.logger.warn("open event");
+  }
+
+  private async getIdempotence(input: OutboxEntity) {
+    const key = `idempotency:${input.id}`;
+    const value = JSON.stringify(input);
+    const ttl = 60 * 5;
+
+    const isSet = await this.redis.client.set(key, value, { EX: ttl });
+    if (isSet === null) {
+      const existing = await this.redis.client.get(key);
+      const idempotence: OutboxEntity = JSON.parse(existing as string);
+      return idempotence.status !== OutboxStatus.failed;
+    }
+    return false;
   }
 
   private async sleep(ms: number): Promise<void> {
